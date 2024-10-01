@@ -201,6 +201,73 @@ resource "aws_lb_listener" "public_listener" {
   }
 }
 
+# Create a Security Group for RDS PostgreSQL
+resource "aws_security_group" "rds_sg" {
+  name        = "${var.stage}-rds-sg"
+  description = "Security group for RDS PostgreSQL"
+  vpc_id      = aws_vpc.this.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.container_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Create PostgreSQL RDS instance
+resource "aws_db_instance" "postgres" {
+  allocated_storage    = 20
+  storage_type         = "gp2"
+  engine               = "postgres"
+  engine_version       = "16.4"
+  instance_class       = "db.t3.micro"
+  db_name              = var.database_name    # Use 'db_name' for the database name
+  username             = var.database_user    # Corresponds to DATABASE_USER
+  password             = var.database_password # Corresponds to DATABASE_PASSWORD
+  parameter_group_name = "default.postgres16"
+  skip_final_snapshot  = true
+  publicly_accessible  = false
+  vpc_security_group_ids = [aws_security_group.rds_sg.id]
+
+  # Ensure you are deploying in the private subnets for better security.
+  db_subnet_group_name = aws_db_subnet_group.rds.name
+  multi_az             = false
+  backup_retention_period = 7
+
+  tags = {
+    Name = "${var.stage}-rds-postgres"
+  }
+}
+
+# Subnet group for RDS
+resource "aws_db_subnet_group" "rds" {
+  name       = "${var.stage}-rds-subnet-group"
+  subnet_ids = aws_subnet.private[*].id
+
+  tags = {
+    Name = "${var.stage}-rds-subnet-group"
+  }
+}
+
+# Output the RDS endpoint and database name
+output "rds_endpoint" {
+  description = "PostgreSQL RDS endpoint"
+  value       = aws_db_instance.postgres.endpoint
+}
+
+output "rds_db_name" {
+  description = "PostgreSQL database name"
+  value       = aws_db_instance.postgres.db_name
+}
+
 # Create ECS Cluster
 resource "aws_ecs_cluster" "this" {
   name = "${var.stage}-ecs-cluster"
@@ -370,6 +437,13 @@ resource "aws_ecs_task_definition" "flowise" {
       ]
       environment = [
         { name = "PORT", value = "3000" },
+        ### Add the following environment variables if using PostgreSQL/MySQL/MariaDB
+        # { name = "DATABASE_TYPE", value = "postgres" },
+        # { name = "DATABASE_HOST", value = aws_db_instance.postgres.endpoint },
+        # { name = "DATABASE_PORT", value = "5432" }, 
+        # { name = "DATABASE_NAME", value = var.database_name },
+        # { name = "DATABASE_USER", value = var.database_user },
+        # { name = "DATABASE_PASSWORD", value = var.database_password },
         { name = "CORS_ORIGINS", value = "*" },
         { name = "IFRAME_ORIGINS", value = "*" },
         { name = "DATABASE_PATH", value = "/root/.flowise" },
